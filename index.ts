@@ -12,165 +12,205 @@ const PORT = 3000;
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-app.post('/sign_up', async (req: Request, res: Response) => {
-	const user = req.body;
-	const { username } = req.body;
+class Server {
+	private app: express.Application;
+	private readonly PORT: number;
 
-	try {
-		const existingUser = await users.findOne({ username });
-		if (existingUser) {
-			console.log(existingUser);
-			return res.status(409).send('User already registered');
-		}
-
-		const hashedPassword = await bcrypt.hash(user.password, 10);
-		user.password = hashedPassword;
-		const result = await users.insertOne(user);
-
-		console.log(result);
-		res.status(200).send('User registered successfully');
-	} catch (err) {
-		console.log(err);
-		res.status(500).send('Internal Server Error');
+	constructor(port: number) {
+		this.PORT = port;
+		this.app = express();
+		this.configureMiddleware();
+		this.configureRoutes();
+		this.connectToDatabase();
 	}
-});
 
-app.get('/all', async (req: Request, res: Response) => {
-	try {
-		console.log(await users.findOne({}));
-	} catch (err) {
-		console.log(err);
-		res.status(500).send('Internal Server Error');
+	private configureMiddleware(): void {
+		this.app.use(express.json());
+		this.app.use(cookieParser());
 	}
-});
 
-app.post('/login', async (req: Request, res: Response) => {
-	const { username, password } = req.body;
-	const { accessToken, refreshToken } = getTokens(username);
+	private configureRoutes(): void {
+		this.app.post('/sign_up', this.signUpHandler);
+		this.app.get('/all', this.getAllHandler);
+		this.app.post('/login', this.loginHandler);
+		this.app.post('/refresh', this.refreshHandler);
+		this.app.post('/logout', this.logoutHandler);
+	}
 
-	try {
-		const user = await users.findOne({ username });
+	private async signUpHandler(req: Request, res: Response): Promise<void> {
+		const user = req.body;
+		const { username } = req.body;
 
-		if (!user) {
-			res.status(404).send('User not registered yet');
-			return;
-		}
+		try {
+			const existingUser = await users.findOne({ username });
+			if (existingUser) {
+				console.log(existingUser);
+				res.status(409).send('User already registered');
+				return;
+			}
 
-		const passMatch = await bcrypt.compare(password, user.password);
-		if (!passMatch) {
-			res.status(400).send('Invalid username or password');
-			return;
-		}
+			const hashedPassword = await bcrypt.hash(user.password, 10);
+			user.password = hashedPassword;
+			const result = await users.insertOne(user);
 
-		const tokenResult = await tokens.insertOne({
-			refreshToken,
-			userId: user._id,
-		});
-		if (!tokenResult) {
+			console.log(result);
+			res.status(200).send('User registered successfully');
+		} catch (err) {
+			console.log(err);
 			res.status(500).send('Internal Server Error');
-			return;
 		}
-
-		res.setHeader(
-			'Set-Cookie',
-			cookie.serialize('refreshToken', refreshToken, {
-				httpOnly: true,
-				maxAge: refreshTokenAge,
-			})
-		);
-		res.status(200).send(accessToken);
-	} catch (err) {
-		console.log(err);
-		res.status(500).send('Internal Server Error');
 	}
-});
 
-app.post('/refresh', async (req: Request, res: Response) => {
-	try {
-		const refreshToken = req.cookies.refreshToken;
-		if (!refreshToken) {
-			return res.status(401).send('Refresh token not found');
-		}
-		const decodedRefreshToken = verifyToken(refreshToken);
-		if (!decodedRefreshToken) {
-			return res.status(401).send('Invalid refresh token');
-		}
-		const { login } = decodedRefreshToken;
-		const user = await users.findOne({ username: login });
-		if (!user) {
-			return res.status(401).send('User not found');
-		}
-
-		const storedToken = await tokens.findOne({
-			refreshToken,
-			userId: user._id,
-		});
-		if (!storedToken) {
-			return res.status(401).send('Invalid refresh token');
-		}
-
-		const { accessToken, refreshToken: newRefreshToken } = getTokens(login);
-
-		const updateResult = await tokens.updateOne(
-			{ _id: storedToken._id },
-			{ $set: { refreshToken: newRefreshToken } }
-		);
-		if (!updateResult) {
+	private async getAllHandler(req: Request, res: Response): Promise<void> {
+		try {
+			console.log(await users.findOne({}));
+		} catch (err) {
+			console.log(err);
 			res.status(500).send('Internal Server Error');
-			return;
 		}
-
-		res.setHeader(
-			'Set-Cookie',
-			cookie.serialize('refreshToken', newRefreshToken, {
-				httpOnly: true,
-				maxAge: refreshTokenAge,
-			})
-		);
-
-		res.status(200).send(accessToken);
-	} catch (err) {
-		console.log(err);
-		res.status(500).send('Internal Server Error');
 	}
-});
 
-app.post('/logout', async (req: Request, res: Response) => {
-	try {
-		const refreshToken = req.cookies.refreshToken;
-		if (!refreshToken) {
-			return res.status(401).send('Refresh token not found');
+	private async loginHandler(req: Request, res: Response): Promise<void> {
+		const { username, password } = req.body;
+		const { accessToken, refreshToken } = getTokens(username);
+
+		try {
+			const user = await users.findOne({ username });
+
+			if (!user) {
+				res.status(404).send('User not registered yet');
+				return;
+			}
+
+			const passMatch = await bcrypt.compare(password, user.password);
+			if (!passMatch) {
+				res.status(400).send('Invalid username or password');
+				return;
+			}
+
+			const tokenResult = await tokens.insertOne({
+				refreshToken,
+				userId: user._id,
+			});
+			if (!tokenResult) {
+				res.status(500).send('Internal Server Error');
+				return;
+			}
+
+			res.setHeader(
+				'Set-Cookie',
+				cookie.serialize('refreshToken', refreshToken, {
+					httpOnly: true,
+					maxAge: refreshTokenAge,
+				})
+			);
+			res.status(200).send(accessToken);
+		} catch (err) {
+			console.log(err);
+			res.status(500).send('Internal Server Error');
 		}
-
-		const decodedRefreshToken = verifyToken(refreshToken);
-		if (!decodedRefreshToken) {
-			return res.status(401).send('Invalid refresh token');
-		}
-
-		const { login } = decodedRefreshToken;
-		const user = await users.findOne({ username: login });
-		if (!user) {
-			return res.status(401).send('User not found');
-		}
-
-		const deleteResult = await tokens.deleteOne({
-			refreshToken,
-			userId: user._id,
-		});
-		if (!deleteResult) {
-			return res.status(500).send('Internal Server Error');
-		}
-
-		res.clearCookie('refreshToken');
-		res.status(200).send('Logout successful');
-	} catch (err) {
-		console.log(err);
-		res.status(500).send('Internal Server Error');
 	}
-});
 
-connectToDatabase().then(() => {
-	app.listen(PORT, () => {
-		console.log(`Listening on port ${PORT}`);
-	});
-});
+	private async refreshHandler(req: Request, res: Response): Promise<void> {
+		try {
+			const refreshToken = req.cookies.refreshToken;
+			if (!refreshToken) {
+				res.status(401).send('Refresh token not found');
+				return;
+			}
+			const decodedRefreshToken = verifyToken(refreshToken);
+			if (!decodedRefreshToken) {
+				res.status(401).send('Invalid refresh token');
+				return;
+			}
+			const { login } = decodedRefreshToken;
+			const user = await users.findOne({ username: login });
+			if (!user) {
+				res.status(401).send('User not found');
+				return;
+			}
+
+			const storedToken = await tokens.findOne({
+				refreshToken,
+				userId: user._id,
+			});
+			if (!storedToken) {
+				res.status(401).send('Invalid refresh token');
+				return;
+			}
+
+			const { accessToken, refreshToken: newRefreshToken } = getTokens(login);
+
+			const updateResult = await tokens.updateOne(
+				{ _id: storedToken._id },
+				{ $set: { refreshToken: newRefreshToken } }
+			);
+			if (!updateResult) {
+				res.status(500).send('Internal Server Error');
+				return;
+			}
+
+			res.setHeader(
+				'Set-Cookie',
+				cookie.serialize('refreshToken', newRefreshToken, {
+					httpOnly: true,
+					maxAge: refreshTokenAge,
+				})
+			);
+
+			res.status(200).send(accessToken);
+		} catch (err) {
+			console.log(err);
+			res.status(500).send('Internal Server Error');
+		}
+	}
+
+	private async logoutHandler(req: Request, res: Response): Promise<void> {
+		try {
+			const refreshToken = req.cookies.refreshToken;
+			if (!refreshToken) {
+				res.status(401).send('User is already logged out');
+				return;
+			}
+
+			const decodedRefreshToken = verifyToken(refreshToken);
+			if (!decodedRefreshToken) {
+				res.status(401).send('Invalid refresh token');
+				return;
+			}
+
+			const { login } = decodedRefreshToken;
+			const user = await users.findOne({ username: login });
+			if (!user) {
+				res.status(401).send('User not found');
+				return;
+			}
+
+			const deleteResult = await tokens.deleteOne({
+				refreshToken,
+				userId: user._id,
+			});
+			if (!deleteResult) {
+				res.status(500).send('Internal Server Error');
+			}
+
+			res.clearCookie('refreshToken');
+			res.status(200).send('Logout successful');
+		} catch (err) {
+			console.log(err);
+			res.status(500).send('Internal Server Error');
+		}
+	}
+
+	private async connectToDatabase(): Promise<void> {
+		try {
+			await connectToDatabase();
+			this.app.listen(this.PORT, () => {
+				console.log(`Listening on port ${this.PORT}`);
+			});
+		} catch (error) {
+			console.log('Failed to connect to the database:', error);
+		}
+	}
+}
+const server = new Server(PORT);

@@ -1,4 +1,6 @@
 import jwt from 'jsonwebtoken';
+import { config } from 'dotenv';
+config();
 
 const signatureAccess = process.env.ACCESS_TOKEN_SECRET;
 const signatureRefresh = process.env.REFRESH_TOKEN_SECRET;
